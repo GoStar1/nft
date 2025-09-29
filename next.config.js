@@ -10,7 +10,26 @@ const nextConfig = {
         return config;
     },
     images: {
-        domains: ['polyplace.infura-ipfs.io'],
+        domains: [
+            'gateway.pinata.cloud',
+            'aquamarine-urgent-minnow-954.mypinata.cloud',
+            'cyan-implicit-salamander-90.mypinata.cloud',
+            '*.mypinata.cloud',
+            'ipfs.io',
+            'polyplace.infura-ipfs.io', // Keep for backward compatibility
+        ],
+        remotePatterns: [
+            {
+                protocol: 'https',
+                hostname: '**.mypinata.cloud',
+                pathname: '/ipfs/**',
+            },
+            {
+                protocol: 'https',
+                hostname: 'gateway.pinata.cloud',
+                pathname: '/ipfs/**',
+            },
+        ],
     },
 };
 

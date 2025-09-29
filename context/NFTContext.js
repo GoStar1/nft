@@ -2,35 +2,23 @@ import React, { useEffect, useState } from 'react';
 import Web3Modal from 'web3modal';
 import { ethers } from 'ethers';
 import axios from 'axios';
-import { create as ipfsHttpClient } from 'ipfs-http-client';
 
 import { MarketAddress, MarketAddressABI } from './constants';
 
-const subdomainName = 'polyplace';
+// Pinata configuration
+const pinataApiKey = process.env.NEXT_PUBLIC_PINATA_API_KEY;
+const pinataSecretApiKey = process.env.NEXT_PUBLIC_PINATA_SECRET_API_KEY;
+const pinataGateway = process.env.NEXT_PUBLIC_PINATA_GATEWAY || 'https://gateway.pinata.cloud/ipfs';
 
-const projectId = process.env.NEXT_PUBLIC_IPFS_PROJECT_ID;
-const projectSecret = process.env.NEXT_PUBLIC_API_KEY_SECRET;
-const auth = `Basic ${Buffer.from(`${projectId}:${projectSecret}`).toString(
-    'base64',
-)}`;
-
-const endpointBasePath = `https://${subdomainName}.infura-ipfs.io/ipfs/`;
-
-const client = ipfsHttpClient({
-    host: 'ipfs.infura.io',
-    port: 5001,
-    protocol: 'https',
-    headers: {
-        authorization: auth,
-    },
-});
+// Use Pinata gateway for accessing IPFS content
+const endpointBasePath = `${pinataGateway}/`;
 
 const fetchContract = (signerOrProvider) => new ethers.Contract(MarketAddress, MarketAddressABI, signerOrProvider);
 
 export const NFTContext = React.createContext();
 
 export const NFTProvider = ({ children }) => {
-    const nftCurrency = 'MATIC';
+    const nftCurrency = 'BNB';
     const [currentAccount, setCurrentAccount] = useState('');
     const [isLoadingNFT, setIsLoadingNFT] = useState(false);
 
@@ -62,15 +50,50 @@ export const NFTProvider = ({ children }) => {
 
     const uploadToIPFS = async (file) => {
         try {
-            const added = await client.add({ content: file });
+            const formData = new FormData();
+            formData.append('file', file);
 
-            const url = `${endpointBasePath}/${added.path}`;
+            const metadata = JSON.stringify({
+                name: `NFT-${Date.now()}`,
+            });
+            formData.append('pinataMetadata', metadata);
 
+            const options = JSON.stringify({
+                cidVersion: 0,
+            });
+            formData.append('pinataOptions', options);
+
+            const response = await axios.post(
+                'https://api.pinata.cloud/pinning/pinFileToIPFS',
+                formData,
+                {
+                    maxBodyLength: 'Infinity',
+                    headers: {
+                        pinata_api_key: pinataApiKey,
+                        pinata_secret_api_key: pinataSecretApiKey,
+                    },
+                },
+            );
+
+            const url = `${endpointBasePath}${response.data.IpfsHash}`;
             console.log(`Upload to IPFS url: ${url}`);
 
             return url;
         } catch (error) {
-            console.log('error uploading file');
+            console.error('Error uploading file to Pinata:', error);
+            if (error.response) {
+                console.error('Error details:', error.response.data);
+                if (error.response.data.reason === 'NO_SCOPES_FOUND') {
+                    alert('API密钥权限错误！请检查Pinata API密钥是否有pinFileToIPFS权限。查看控制台了解详情。');
+                } else if (error.response.status === 401) {
+                    alert('API密钥无效！请检查.env.local文件中的Pinata密钥配置。');
+                } else {
+                    alert(`上传失败：${error.response.data.error || '未知错误'}`);
+                }
+            } else {
+                alert('网络错误，请检查网络连接');
+            }
+            throw error;
         }
     };
 
@@ -99,29 +122,82 @@ export const NFTProvider = ({ children }) => {
     const createNFT = async (formInput, fileUrl, router) => {
         const { name, description, price } = formInput;
 
-        if (!name || !description || !price || !fileUrl) return;
+        if (!name || !description || !price || !fileUrl) {
+            alert('请填写所有字段并上传图片');
+            return;
+        }
 
-        const data = JSON.stringify({ name, description, image: fileUrl });
+        console.log('Creating NFT with:', { name, description, price, fileUrl });
 
         try {
-            const added = await client.add(data);
-            const url = endpointBasePath + added.path;
+            // Check if API keys are configured
+            if (!pinataApiKey || !pinataSecretApiKey) {
+                alert('Pinata API密钥未配置！请检查.env.local文件');
+                return;
+            }
 
-            console.log(`Created NFT url: ${url}`);
+            console.log('Uploading metadata to Pinata...');
 
+            // Upload JSON metadata to Pinata
+            const response = await axios.post(
+                'https://api.pinata.cloud/pinning/pinJSONToIPFS',
+                {
+                    pinataContent: {
+                        name,
+                        description,
+                        image: fileUrl
+                    },
+                    pinataMetadata: {
+                        name: `${name}-metadata`,
+                    },
+                },
+                {
+                    headers: {
+                        'Content-Type': 'application/json',
+                        pinata_api_key: pinataApiKey,
+                        pinata_secret_api_key: pinataSecretApiKey,
+                    },
+                },
+            );
+
+            const url = endpointBasePath + response.data.IpfsHash;
+            console.log(`Created NFT metadata url: ${url}`);
+
+            console.log('Creating sale on blockchain...');
             await createSale(url, price);
 
             router.push('/');
         } catch (error) {
-            console.log('error uploading file');
+            console.error('Error creating NFT:', error);
+
+            if (error.message && error.message.includes('createSale')) {
+                console.error('Smart contract interaction failed');
+                alert('智能合约调用失败！请确保：\n1. 钱包已连接到BSC测试网\n2. 有足够的BNB支付Gas费\n3. 合约地址配置正确');
+            } else if (error.response) {
+                console.error('Pinata API error:', error.response.data);
+                if (error.response.data.reason === 'NO_SCOPES_FOUND') {
+                    alert('API密钥权限错误！请检查Pinata API密钥是否有pinJSONToIPFS权限。\n请重新创建API密钥并选择Admin权限。');
+                } else if (error.response.status === 401) {
+                    alert('API密钥无效！请检查.env.local文件中的Pinata密钥配置。');
+                } else if (error.response.status === 402) {
+                    alert('Pinata账户配额已用完！请检查你的Pinata账户。');
+                } else {
+                    alert(`Pinata上传失败：${error.response.data.error || error.response.data.message || '未知错误'}`);
+                }
+            } else if (error.code === 'ECONNABORTED') {
+                alert('请求超时，请检查网络连接并重试');
+            } else {
+                alert(`创建NFT失败：${error.message || '未知错误'}`);
+                console.error('Full error:', error);
+            }
         }
     };
 
     const fetchNFTs = async () => {
         setIsLoadingNFT(false);
-        const provider = new ethers.providers.AlchemyProvider(
-            'maticmum',
-            process.env.NEXT_PUBLIC_API_KEY,
+        // Using JsonRpcProvider for BSC Testnet
+        const provider = new ethers.providers.JsonRpcProvider(
+            'https://data-seed-prebsc-1-s1.binance.org:8545/',
         );
         const contract = fetchContract(provider);
         const data = await contract.fetchMarketItems();
@@ -134,13 +210,16 @@ export const NFTProvider = ({ children }) => {
                     const { data: { image, name, description } } = await axios.get(tokenURI);
                     const price = ethers.utils.formatUnits(unformattedPrice.toString(), 'ether');
 
+                    // Convert IPFS hash to full URL if needed
+                    const imageUrl = image.startsWith('http') ? image : `${endpointBasePath}${image}`;
+
                     // return an object with relevant properties
                     return {
                         price,
                         tokenId: tokenId.toNumber(),
                         seller,
                         owner,
-                        image,
+                        image: imageUrl,
                         name,
                         description,
                         tokenURI,
@@ -184,12 +263,15 @@ export const NFTProvider = ({ children }) => {
                     'ether',
                 );
 
+                // Convert IPFS hash to full URL if needed
+                const imageUrl = image.startsWith('http') ? image : `${endpointBasePath}${image}`;
+
                 return {
                     price,
                     tokenId: tokenId.toNumber(),
                     seller,
                     owner,
-                    image,
+                    image: imageUrl,
                     name,
                     description,
                     tokenURI,
