@@ -5,12 +5,13 @@ import axios from 'axios';
 
 import { MarketAddress, MarketAddressABI } from './constants';
 
-// Pinata configuration
+// Pinata IPFS配置
+// 从环境变量获取API密钥和网关地址
 const pinataApiKey = process.env.NEXT_PUBLIC_PINATA_API_KEY;
 const pinataSecretApiKey = process.env.NEXT_PUBLIC_PINATA_SECRET_API_KEY;
 const pinataGateway = process.env.NEXT_PUBLIC_PINATA_GATEWAY || 'https://gateway.pinata.cloud/ipfs';
 
-// Use Pinata gateway for accessing IPFS content
+// IPFS内容访问基础路径
 const endpointBasePath = `${pinataGateway}/`;
 
 const fetchContract = (signerOrProvider) => new ethers.Contract(MarketAddress, MarketAddressABI, signerOrProvider);
@@ -18,7 +19,7 @@ const fetchContract = (signerOrProvider) => new ethers.Contract(MarketAddress, M
 export const NFTContext = React.createContext();
 
 export const NFTProvider = ({ children }) => {
-    const nftCurrency = 'BNB';
+    const nftCurrency = 'BNB'; // BSC测试网货币单位
     const [currentAccount, setCurrentAccount] = useState('');
     const [isLoadingNFT, setIsLoadingNFT] = useState(false);
 
@@ -28,8 +29,6 @@ export const NFTProvider = ({ children }) => {
         const accounts = await window.ethereum.request({ method: 'eth_accounts' });
         if (accounts.length) {
             setCurrentAccount(accounts[0]);
-        } else {
-            console.log('No accounts found');
         }
     };
 
@@ -48,6 +47,7 @@ export const NFTProvider = ({ children }) => {
         window.location.reload();
     };
 
+    // 上传文件到IPFS（通过Pinata）
     const uploadToIPFS = async (file) => {
         try {
             const formData = new FormData();
@@ -76,13 +76,9 @@ export const NFTProvider = ({ children }) => {
             );
 
             const url = `${endpointBasePath}${response.data.IpfsHash}`;
-            console.log(`Upload to IPFS url: ${url}`);
-
             return url;
         } catch (error) {
-            console.error('Error uploading file to Pinata:', error);
             if (error.response) {
-                console.error('Error details:', error.response.data);
                 if (error.response.data.reason === 'NO_SCOPES_FOUND') {
                     alert('API密钥权限错误！请检查Pinata API密钥是否有pinFileToIPFS权限。查看控制台了解详情。');
                 } else if (error.response.status === 401) {
@@ -119,6 +115,7 @@ export const NFTProvider = ({ children }) => {
         await transaction.wait();
     };
 
+    // 创建NFT - 上传元数据并调用智能合约
     const createNFT = async (formInput, fileUrl, router) => {
         const { name, description, price } = formInput;
 
@@ -127,16 +124,12 @@ export const NFTProvider = ({ children }) => {
             return;
         }
 
-        console.log('Creating NFT with:', { name, description, price, fileUrl });
-
         try {
             // Check if API keys are configured
             if (!pinataApiKey || !pinataSecretApiKey) {
                 alert('Pinata API密钥未配置！请检查.env.local文件');
                 return;
             }
-
-            console.log('Uploading metadata to Pinata...');
 
             // Upload JSON metadata to Pinata
             const response = await axios.post(
@@ -161,20 +154,13 @@ export const NFTProvider = ({ children }) => {
             );
 
             const url = endpointBasePath + response.data.IpfsHash;
-            console.log(`Created NFT metadata url: ${url}`);
-
-            console.log('Creating sale on blockchain...');
             await createSale(url, price);
 
             router.push('/');
         } catch (error) {
-            console.error('Error creating NFT:', error);
-
             if (error.message && error.message.includes('createSale')) {
-                console.error('Smart contract interaction failed');
                 alert('智能合约调用失败！请确保：\n1. 钱包已连接到BSC测试网\n2. 有足够的BNB支付Gas费\n3. 合约地址配置正确');
             } else if (error.response) {
-                console.error('Pinata API error:', error.response.data);
                 if (error.response.data.reason === 'NO_SCOPES_FOUND') {
                     alert('API密钥权限错误！请检查Pinata API密钥是否有pinJSONToIPFS权限。\n请重新创建API密钥并选择Admin权限。');
                 } else if (error.response.status === 401) {
@@ -188,14 +174,14 @@ export const NFTProvider = ({ children }) => {
                 alert('请求超时，请检查网络连接并重试');
             } else {
                 alert(`创建NFT失败：${error.message || '未知错误'}`);
-                console.error('Full error:', error);
             }
         }
     };
 
+    // 获取市场上的所有NFT
     const fetchNFTs = async () => {
         setIsLoadingNFT(false);
-        // Using JsonRpcProvider for BSC Testnet
+        // 使用BSC测试网RPC节点
         const provider = new ethers.providers.JsonRpcProvider(
             'https://data-seed-prebsc-1-s1.binance.org:8545/',
         );
@@ -205,7 +191,6 @@ export const NFTProvider = ({ children }) => {
         const items = await Promise.all(
             data.map(async ({ tokenId, seller, owner, price: unformattedPrice }) => {
                 const tokenURI = await contract.tokenURI(tokenId);
-                console.log('data', tokenURI);
                 try {
                     const { data: { image, name, description } } = await axios.get(tokenURI);
                     const price = ethers.utils.formatUnits(unformattedPrice.toString(), 'ether');
@@ -226,12 +211,10 @@ export const NFTProvider = ({ children }) => {
                     };
                 } catch (error) {
                     if (error.response && error.response.status === 404) {
-                        // handle 404 error here
-                        console.log('Token URI not found.');
+                        // Token URI not found - return null to filter out
                         return null;
                     }
-                    // handle other errors here
-                    console.error(error);
+                    // Handle other errors - return null to filter out
                     return null;
                 }
             }),
