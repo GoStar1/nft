@@ -5,13 +5,13 @@ import axios from 'axios';
 
 import { MarketAddress, MarketAddressABI } from './constants';
 
-// Pinata IPFS配置
-// 从环境变量获取API密钥和网关地址
+// Pinata IPFS Configuration
+// Get API keys and gateway URL from environment variables
 const pinataApiKey = process.env.NEXT_PUBLIC_PINATA_API_KEY;
 const pinataSecretApiKey = process.env.NEXT_PUBLIC_PINATA_SECRET_API_KEY;
 const pinataGateway = process.env.NEXT_PUBLIC_PINATA_GATEWAY || 'https://gateway.pinata.cloud/ipfs';
 
-// IPFS内容访问基础路径
+// IPFS content access base path
 const endpointBasePath = `${pinataGateway}/`;
 
 const fetchContract = (signerOrProvider) => new ethers.Contract(MarketAddress, MarketAddressABI, signerOrProvider);
@@ -19,7 +19,7 @@ const fetchContract = (signerOrProvider) => new ethers.Contract(MarketAddress, M
 export const NFTContext = React.createContext();
 
 export const NFTProvider = ({ children }) => {
-    const nftCurrency = 'BNB'; // BSC测试网货币单位
+    const nftCurrency = 'BNB'; // BSC Testnet currency
     const [currentAccount, setCurrentAccount] = useState('');
     const [isLoadingNFT, setIsLoadingNFT] = useState(false);
 
@@ -47,7 +47,7 @@ export const NFTProvider = ({ children }) => {
         window.location.reload();
     };
 
-    // 上传文件到IPFS（通过Pinata）
+    // Upload file to IPFS (via Pinata)
     const uploadToIPFS = async (file) => {
         try {
             const formData = new FormData();
@@ -80,54 +80,99 @@ export const NFTProvider = ({ children }) => {
         } catch (error) {
             if (error.response) {
                 if (error.response.data.reason === 'NO_SCOPES_FOUND') {
-                    alert('API密钥权限错误！请检查Pinata API密钥是否有pinFileToIPFS权限。查看控制台了解详情。');
+                    alert('API key permission error! Please check if your Pinata API key has pinFileToIPFS permission. Check console for details.');
                 } else if (error.response.status === 401) {
-                    alert('API密钥无效！请检查.env.local文件中的Pinata密钥配置。');
+                    alert('Invalid API key! Please check Pinata key configuration in .env.local file.');
                 } else {
-                    alert(`上传失败：${error.response.data.error || '未知错误'}`);
+                    alert(`Upload failed: ${error.response.data.error || 'Unknown error'}`);
                 }
             } else {
-                alert('网络错误，请检查网络连接');
+                alert('Network error, please check your internet connection');
             }
             throw error;
         }
     };
 
     const createSale = async (url, formInputPrice, isReselling, id) => {
-        const web3Modal = new Web3Modal();
-        const connection = await web3Modal.connect();
-        const provider = new ethers.providers.Web3Provider(connection);
-        const signer = provider.getSigner();
+        // Validate price input
+        if (!formInputPrice || formInputPrice === '') {
+            alert('Please enter a price');
+            throw new Error('Price cannot be empty');
+        }
 
-        const price = ethers.utils.parseUnits(formInputPrice, 'ether');
-        const contract = fetchContract(signer);
-        const listingPrice = await contract.getListingPrice();
+        // Check if it's a valid number
+        const priceNum = parseFloat(formInputPrice);
+        if (isNaN(priceNum) || priceNum <= 0) {
+            alert('Please enter a valid price (must be greater than 0)');
+            throw new Error('Invalid price');
+        }
 
-        const transaction = !isReselling
-            ? await contract.createToken(url, price, {
-                value: listingPrice.toString(),
-            })
-            : await contract.resellToken(id, price, {
-                value: listingPrice.toString(),
-            });
+        try {
+            // Check if MetaMask is installed
+            if (!window.ethereum) {
+                alert('Please install MetaMask to continue');
+                throw new Error('MetaMask not installed');
+            }
 
-        setIsLoadingNFT(true);
-        await transaction.wait();
+            console.log('Connecting to wallet...');
+            const web3Modal = new Web3Modal();
+            const connection = await web3Modal.connect();
+            const provider = new ethers.providers.Web3Provider(connection);
+            const signer = provider.getSigner();
+
+            const price = ethers.utils.parseUnits(formInputPrice.toString(), 'ether');
+            const contract = fetchContract(signer);
+            const listingPrice = await contract.getListingPrice();
+
+            console.log('Creating transaction...', { isReselling, id, price: formInputPrice });
+            const transaction = !isReselling
+                ? await contract.createToken(url, price, {
+                    value: listingPrice.toString(),
+                })
+                : await contract.resellToken(id, price, {
+                    value: listingPrice.toString(),
+                });
+
+            setIsLoadingNFT(true);
+            await transaction.wait();
+            setIsLoadingNFT(false);
+        } catch (error) {
+            setIsLoadingNFT(false);
+            console.error('Error in createSale:', error);
+
+            if (error.code === 4001) {
+                alert('Transaction cancelled by user');
+            } else if (error.code === -32002) {
+                alert('Please connect your wallet in MetaMask');
+            } else if (error.message && error.message.includes('user rejected')) {
+                alert('Transaction rejected by user');
+            } else {
+                alert(`Transaction failed: ${error.message || 'Unknown error'}`);
+            }
+            throw error;
+        }
     };
 
-    // 创建NFT - 上传元数据并调用智能合约
+    // Create NFT - Upload metadata and call smart contract
     const createNFT = async (formInput, fileUrl, router) => {
         const { name, description, price } = formInput;
 
         if (!name || !description || !price || !fileUrl) {
-            alert('请填写所有字段并上传图片');
+            alert('Please fill in all fields and upload an image');
+            return;
+        }
+
+        // Validate price input validity
+        const priceNum = parseFloat(price);
+        if (isNaN(priceNum) || priceNum <= 0) {
+            alert('Please enter a valid price (must be greater than 0)');
             return;
         }
 
         try {
             // Check if API keys are configured
             if (!pinataApiKey || !pinataSecretApiKey) {
-                alert('Pinata API密钥未配置！请检查.env.local文件');
+                alert('Pinata API key not configured! Please check .env.local file');
                 return;
             }
 
@@ -159,29 +204,29 @@ export const NFTProvider = ({ children }) => {
             router.push('/');
         } catch (error) {
             if (error.message && error.message.includes('createSale')) {
-                alert('智能合约调用失败！请确保：\n1. 钱包已连接到BSC测试网\n2. 有足够的BNB支付Gas费\n3. 合约地址配置正确');
+                alert('Smart contract call failed! Please ensure:\n1. Wallet is connected to BSC Testnet\n2. You have enough BNB for gas fees\n3. Contract address is configured correctly');
             } else if (error.response) {
                 if (error.response.data.reason === 'NO_SCOPES_FOUND') {
-                    alert('API密钥权限错误！请检查Pinata API密钥是否有pinJSONToIPFS权限。\n请重新创建API密钥并选择Admin权限。');
+                    alert('API key permission error! Please check if your Pinata API key has pinJSONToIPFS permission.\nPlease create a new API key with Admin permissions.');
                 } else if (error.response.status === 401) {
-                    alert('API密钥无效！请检查.env.local文件中的Pinata密钥配置。');
+                    alert('Invalid API key! Please check Pinata key configuration in .env.local file.');
                 } else if (error.response.status === 402) {
-                    alert('Pinata账户配额已用完！请检查你的Pinata账户。');
+                    alert('Pinata account quota exceeded! Please check your Pinata account.');
                 } else {
-                    alert(`Pinata上传失败：${error.response.data.error || error.response.data.message || '未知错误'}`);
+                    alert(`Pinata upload failed: ${error.response.data.error || error.response.data.message || 'Unknown error'}`);
                 }
             } else if (error.code === 'ECONNABORTED') {
-                alert('请求超时，请检查网络连接并重试');
+                alert('Request timeout, please check your internet connection and try again');
             } else {
-                alert(`创建NFT失败：${error.message || '未知错误'}`);
+                alert(`Failed to create NFT: ${error.message || 'Unknown error'}`);
             }
         }
     };
 
-    // 获取市场上的所有NFT
+    // Fetch all NFTs from marketplace
     const fetchNFTs = async () => {
         setIsLoadingNFT(false);
-        // 使用BSC测试网RPC节点
+        // Use BSC Testnet RPC node
         const provider = new ethers.providers.JsonRpcProvider(
             'https://data-seed-prebsc-1-s1.binance.org:8545/',
         );
@@ -210,11 +255,44 @@ export const NFTProvider = ({ children }) => {
                         tokenURI,
                     };
                 } catch (error) {
-                    if (error.response && error.response.status === 404) {
-                        // Token URI not found - return null to filter out
-                        return null;
+                    if (error.response) {
+                        if (error.response.status === 404) {
+                            // Token URI not found - return null to filter out
+                            return null;
+                        } else if (error.response.status === 403) {
+                            console.error('403 Error - Access denied:', tokenURI);
+                            console.error('Possible reasons: IPFS gateway requires authentication or CORS restriction');
+                            // Try using public IPFS gateway
+                            if (tokenURI.includes('ipfs')) {
+                                const hash = tokenURI.split('/ipfs/')[1];
+                                if (hash) {
+                                    try {
+                                        const publicUrl = `https://ipfs.io/ipfs/${hash}`;
+                                        console.log('Trying public gateway:', publicUrl);
+                                        const { data: { image, name, description } } = await axios.get(publicUrl);
+                                        const price = ethers.utils.formatUnits(unformattedPrice.toString(), 'ether');
+                                        const imageUrl = image.startsWith('http') ? image : `${endpointBasePath}${image}`;
+                                        return {
+                                            price,
+                                            tokenId: tokenId.toNumber(),
+                                            seller,
+                                            owner,
+                                            image: imageUrl,
+                                            name,
+                                            description,
+                                            tokenURI,
+                                        };
+                                    } catch (retryError) {
+                                        console.error('Public gateway also failed:', retryError.message);
+                                        return null;
+                                    }
+                                }
+                            }
+                            return null;
+                        }
                     }
                     // Handle other errors - return null to filter out
+                    console.error('Error fetching NFT metadata:', error.message);
                     return null;
                 }
             }),
@@ -238,27 +316,56 @@ export const NFTProvider = ({ children }) => {
         const items = await Promise.all(
             data.map(async ({ tokenId, seller, owner, price: unformattedPrice }) => {
                 const tokenURI = await contract.tokenURI(tokenId);
-                const {
-                    data: { image, name, description },
-                } = await axios.get(tokenURI);
-                const price = ethers.utils.formatUnits(
-                    unformattedPrice.toString(),
-                    'ether',
-                );
+                try {
+                    const {
+                        data: { image, name, description },
+                    } = await axios.get(tokenURI);
+                    const price = ethers.utils.formatUnits(
+                        unformattedPrice.toString(),
+                        'ether',
+                    );
 
-                // Convert IPFS hash to full URL if needed
-                const imageUrl = image.startsWith('http') ? image : `${endpointBasePath}${image}`;
+                    // Convert IPFS hash to full URL if needed
+                    const imageUrl = image.startsWith('http') ? image : `${endpointBasePath}${image}`;
 
-                return {
-                    price,
-                    tokenId: tokenId.toNumber(),
-                    seller,
-                    owner,
-                    image: imageUrl,
-                    name,
-                    description,
-                    tokenURI,
-                };
+                    return {
+                        price,
+                        tokenId: tokenId.toNumber(),
+                        seller,
+                        owner,
+                        image: imageUrl,
+                        name,
+                        description,
+                        tokenURI,
+                    };
+                } catch (error) {
+                    console.error('Failed to fetch NFT metadata:', tokenURI, error.message);
+                    // If it's a 403 error, try using public gateway
+                    if (error.response && error.response.status === 403 && tokenURI.includes('ipfs')) {
+                        const hash = tokenURI.split('/ipfs/')[1];
+                        if (hash) {
+                            try {
+                                const publicUrl = `https://ipfs.io/ipfs/${hash}`;
+                                const { data: { image, name, description } } = await axios.get(publicUrl);
+                                const price = ethers.utils.formatUnits(unformattedPrice.toString(), 'ether');
+                                const imageUrl = image.startsWith('http') ? image : `${endpointBasePath}${image}`;
+                                return {
+                                    price,
+                                    tokenId: tokenId.toNumber(),
+                                    seller,
+                                    owner,
+                                    image: imageUrl,
+                                    name,
+                                    description,
+                                    tokenURI,
+                                };
+                            } catch (retryError) {
+                                return null;
+                            }
+                        }
+                    }
+                    return null;
+                }
             }),
         );
         return items;

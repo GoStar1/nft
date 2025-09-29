@@ -1,11 +1,11 @@
 import { useEffect, useState, useContext } from 'react';
 import { useRouter } from 'next/router';
 
-import axios from 'axios';
 import withTransition from '../components/withTransition';
 
 import { NFTContext } from '../context/NFTContext';
 import { Button, Input, Loader } from '../components';
+import { fetchFromIPFS, getAccessibleImageUrl } from '../utils/ipfsHelper';
 
 const ResellNFT = () => {
     const { createSale, isLoadingNFT } = useContext(NFTContext);
@@ -17,10 +17,16 @@ const ResellNFT = () => {
     const fetchNFT = async () => {
         if (!tokenURI) return;
 
-        const { data } = await axios.get(tokenURI);
-
-        setPrice(data.price);
-        setImage(data.image);
+        try {
+            // Use helper function to automatically try multiple gateways
+            const data = await fetchFromIPFS(tokenURI);
+            setPrice(data.price);
+            // Ensure image URL is accessible
+            setImage(getAccessibleImageUrl(data.image));
+        } catch (error) {
+            console.error('Failed to fetch NFT data:', error);
+            alert('Unable to fetch NFT data, please try again later');
+        }
     };
 
     useEffect(() => {
@@ -28,9 +34,35 @@ const ResellNFT = () => {
     }, [id]);
 
     const resell = async () => {
-        await createSale(tokenURI, price, true, id);
+        console.log('Resell button clicked', { price, tokenURI, id });
 
-        router.push('/');
+        // Validate price input
+        if (!price || price === '') {
+            alert('Please enter a price');
+            return;
+        }
+
+        const priceNum = parseFloat(price);
+        if (isNaN(priceNum) || priceNum <= 0) {
+            alert('Please enter a valid price (must be greater than 0)');
+            return;
+        }
+
+        // Check if we have required parameters
+        if (!tokenURI || !id) {
+            alert('Missing NFT information. Please go back and try again.');
+            console.error('Missing parameters:', { tokenURI, id });
+            return;
+        }
+
+        try {
+            console.log('Calling createSale with:', { tokenURI, price, id });
+            await createSale(tokenURI, price, true, id);
+            router.push('/');
+        } catch (error) {
+            console.error('Resell failed:', error);
+            // Error already handled and displayed in createSale
+        }
     };
 
     if (isLoadingNFT) {
